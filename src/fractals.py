@@ -8,16 +8,23 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import *
 import numpy as np
-import ctypes as c
+#from compiler.ast import For
+sys.path += ['.']
 
-def readPalette():
+def readPalette(filename):
     data = []
-    f = open( "Fractal_Palette.pbm", 'r' )
+    f = open( filename, 'r' ) #16 color palette
+    f.seek(0,2)
+    j = f.tell()
+    f.seek(0)
+    
     i = 0
-    f.read(8)
+    f.read(12) #skip stuff we dont care about
+    j -= 12 
 #    data.append( f.read( 3 ) )
-    f.read(4)
-    for i in xrange( 16 ):
+#    f.read(4)
+    
+    for i in xrange( j/3 ):
         for x in xrange(3):
             data.append( f.read( 1 ) )
     f.close()
@@ -92,8 +99,8 @@ void main() {
     //float norm = sqrt(pos.x*pos.x+pos.y*pos.y);
     //vec3 color = vec3(pos.x*pos.x/norm, pos.y*pos.y/norm, pos.x*pos.y/norm);
     //gl_FragColor = vec4(color, 1.0);
-    vec2 c = vec2(0.8, 0.08) + frac;
-    int iter = 128 + step;
+    vec2 c = /*vec2(0.8, 0.08) + */frac;
+    int iter = 127 + step;
     vec2 z = pos;
     //z.x = 2.0 * (gl_TexCoord[0].x - 0.5);//pos;
     //z.y = 2.0 * (gl_TexCoord[0].y - 0.5);
@@ -104,9 +111,9 @@ void main() {
         if(dot(z,z) > 4.0) break;
     }
     if(palette == false)
-        gl_FragColor = vec4(i*.02, i*0.008, i*0.001, 0.0);
+        gl_FragColor = vec4(i*.04, i*0.008, i*0.001, 0.0);
     else
-        gl_FragColor = texture(tex, (i == iter ? 32.0/i : i/18.0));
+        gl_FragColor = texture(tex, (i == iter ? 32.0/i : i/16.0));
 }
 """
 
@@ -119,6 +126,7 @@ class renderer():
         self.ebo = GLuint
         self.tex = GLuint
         self.size = [size[0], size[1]]
+        self.palette_colors = len(palette)/3
         self.palette = np.empty(len(palette), dtype='float32')
         print len(palette)
         #normalize
@@ -128,36 +136,59 @@ class renderer():
         for i in xrange(48):
             print self.palette[i]
         
+        self.palette_bool = False
         self.key_zoom = 1.0
         self.key_panx = 0.0
         self.key_pany = 0.0
+        self.key_pan_precis = 0.01
         self.key_step = 1
         self.uni_c = GLuint
-        self.c_1 = 0
-        self.c_2 = 0
-        self.b_palette = False
+        self.c_1 = 0.80
+        self.c_2 = 0.08
+        
         self.count = 0
+        
+        self.hud1_str = ["zoom: %f", "pos x: %f  y: %f", "iterations: %i",\
+                         "c(%f, %fi)", "palette size: %i"]
+        self.hud2_str = ["[: show / hide stats", "]: show / hide help", "Q: zoom in", "E: zoom out", "WSAD: pan",\
+                         "-+: pan precision", "ZX: -+ iterations", "FG: -+ c-plane x coord", "VB: -+ c-plane i coord",\
+                         "H: custom color palette on/off" ]
+        self.hud1_size = len(self.hud1_str)
+        self.hud2_size = len(self.hud2_str)
+        self.hud1_pos = (-0.98, 0.97)
+        self.hud2_pos = (-0.98, -0.57)
+        self.hud1_show = 1
+        self.hud2_show = 1
+        self.hud_ds = [""]*(self.hud2_size+self.hud2_size)
         self.initialize()
         
     def keyboard(self, key, x, y):
-        if(key == 'q'):
+        if(key == '['):
+            self.hud1_show ^= 1
+        elif(key == ']'):
+            self.hud2_show ^= 1
+        elif(key == '-'):
+            self.key_pan_precis *= 10
+        elif(key == '+'):
+            self.key_pan_precis /= 10
+        elif(key == 'e'):
             self.key_zoom += 0.1
             self.key_zoom *= 1.2
-        elif(key == 'e'):
+        elif(key == 'q'):
             self.key_zoom -= 0.1
             self.key_zoom *= 0.83
         elif(key == 'w'):
-            self.key_panx += 0.01/self.key_zoom*1.5
+            self.key_panx += self.key_pan_precis/self.key_zoom*1.5
         elif(key == 's'):
-            self.key_panx -= 0.01/self.key_zoom*1.5
+            self.key_panx -= self.key_pan_precis/self.key_zoom*1.5
         elif(key == 'a'):
-            self.key_pany -= 0.01/self.key_zoom*1.5
+            self.key_pany -= self.key_pan_precis/self.key_zoom*1.5
         elif(key == 'd'):
-            self.key_pany += 0.01/self.key_zoom*1.5
+            self.key_pany += self.key_pan_precis/self.key_zoom*1.5
         elif(key == 'z'):
-            self.key_step += 1
-        elif(key == 'x'):
             self.key_step -= 1
+        elif(key == 'x'):
+            self.key_step += 1
         elif(key == 'f'):
             self.c_1 -= 0.001
         elif(key == 'g'):
@@ -167,12 +198,13 @@ class renderer():
         elif(key == 'b'):
             self.c_2 += 0.001
         elif(key == 'h'):
-            if(self.b_palette == False):
-                self.b_palette = True
+            if(self.palette_bool == False):
+                self.palette_bool = True
             else: 
-                self.b_palette = False
-                
-        print "zoom %f" % self.key_zoom
+                self.palette_bool = False
+        
+        glutPostRedisplay()
+        #print "zoom %f" % self.key_zoom
                          
     def createBuffers(self):
         self.vbo = glGenBuffers(1)
@@ -233,7 +265,7 @@ class renderer():
         #
         glUseProgram(self.shaderProg)
         return 0
-    
+        
     def createTextures(self):
         self.tex = glGenTextures(1)
         glActiveTexture(GL_TEXTURE0)
@@ -241,42 +273,73 @@ class renderer():
         glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         
-        glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 16, 0, GL_RGB, GL_FLOAT, self.palette)
+        glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, self.palette_colors, 0, GL_RGB, GL_FLOAT, self.palette)
         glUniform1i(glGetUniformLocation(self.shaderProg, 'tex'), 0)
         
-    def uniforms(self):        
+    def initUniforms(self):        
         self.uni_pos = glGetUniformLocation(self.shaderProg, "pos")
-        self.step = glGetUniformLocation(self.shaderProg, "step")
-        glUniform1i(self.step, 0)
-        self.zoom = glGetUniformLocation(self.shaderProg, "zoom")
-        glUniform1f(self.zoom, 1.0)
-        self.pan = glGetUniformLocation(self.shaderProg, "pan")
-        glUniform2f(self.pan, 0, 0)
+        self.uni_step = glGetUniformLocation(self.shaderProg, "step")
+        glUniform1i(self.uni_step, 0)
+        self.uni_zoom = glGetUniformLocation(self.shaderProg, "zoom")
+        glUniform1f(self.uni_zoom, 1.0)
+        self.uni_pan = glGetUniformLocation(self.shaderProg, "pan")
+        glUniform2f(self.uni_pan, 0, 0)
         self.uni_c = glGetUniformLocation(self.shaderProg, "frac")
         glUniform2f(self.uni_c, self.c_1, self.c_2)
         self.uni_palette = glGetUniformLocation(self.shaderProg, "palette")
-        glUniform1i(self.uni_palette, self.b_palette)
+        glUniform1i(self.uni_palette, self.palette_bool)
         
     def colorCycle(self):
         self.count += 3
         if(self.count > 47):
             self.count = 0
             
+    def drawHud(self):
+        if(self.hud1_show == True):
+            self.hud_ds[0] = self.hud1_str[0] % (self.key_zoom)
+            self.hud_ds[1] = self.hud1_str[1] % (self.key_panx, self.key_pany)
+            self.hud_ds[2] = self.hud1_str[2] % (self.key_step+127)
+            self.hud_ds[3] = self.hud1_str[3] % (self.c_1, self.c_2)
+            if(self.palette_bool == True):
+                self.hud_ds[4] = self.hud1_str[4] % (self.palette_colors)
+            else:
+                self.hud_ds[4] = ""
+            glRasterPos2f(self.hud1_pos[0], self.hud1_pos[1])       
+            
+            for i in xrange(self.hud1_size):
+                glRasterPos2f(self.hud1_pos[0], self.hud1_pos[1]-0.03*float(i))
+                for x in range(len(self.hud_ds[i])):
+                    glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord(self.hud_ds[i][x]))
+        
+        if(self.hud2_show == True):
+            for j in xrange(self.hud2_size):
+                self.hud_ds[self.hud1_size+j] = self.hud2_str[j]
+            glRasterPos2f(self.hud2_pos[0], self.hud2_pos[1])
+            
+            for i in range(self.hud1_size, self.hud2_size+self.hud1_size):
+                glRasterPos2f(self.hud2_pos[0], self.hud2_pos[1]-0.03*float(i))
+                for x in range(len(self.hud_ds[i])):
+                    glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord(self.hud_ds[i][x]))
+                    
     def draw(self):
         glClear(GL_COLOR_BUFFER_BIT)
+        glUseProgram(self.shaderProg)
         glUniform3f(self.uni_pos,
                     self.palette[self.count],
                     self.palette[self.count+1],
                     self.palette[self.count+2])
-        glUniform1i(self.step, self.key_step)
-        glUniform1f(self.zoom, self.key_zoom)
-        glUniform2f(self.pan, self.key_pany, self.key_panx) 
+        glUniform1i(self.uni_step, self.key_step)
+        glUniform1f(self.uni_zoom, self.key_zoom)
+        glUniform2f(self.uni_pan, self.key_pany, self.key_panx) 
         glUniform2f(self.uni_c, self.c_1, self.c_2)
-        glUniform1i(self.uni_palette, self.b_palette)       
+        glUniform1i(self.uni_palette, self.palette_bool)       
         glDrawArrays(GL_QUADS, 0, 4)
-        self.colorCycle()
+#        self.colorCycle()
+        glUseProgram(0)
+        self.drawHud()
+                
         glutSwapBuffers()
-        glutPostRedisplay()
+        
         
     def initialize(self):
         glViewport(0, 0, self.size[0], self.size[1])
@@ -286,11 +349,8 @@ class renderer():
             print "**EXIT**"
             sys.exit()
         self.createTextures()
-        self.uniforms()
-        
+        self.initUniforms()
         self.draw()
-    
-
             
 def init():
     global frac
@@ -301,7 +361,7 @@ def init():
     glutInitWindowSize(800, 800)
     glutCreateWindow("FragRenderer")
     #frac = Fractal((GLUT_WINDOW_WIDTH, GLUT_WINDOW_HEIGHT))
-    palette16 = readPalette()
+    palette16 = readPalette(sys.argv[1])
     print palette16
     rend = renderer((800, 800), palette16)
     
