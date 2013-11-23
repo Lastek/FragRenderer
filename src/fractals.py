@@ -8,12 +8,52 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import *
 import numpy as np
-#from compiler.ast import For
+
 sys.path += ['.']
 
+#*******************************************************************************
+# 
+# class Fractal():
+#     def __init__(self, size):
+#         self.array = np.zeros(shape=(size[0], size[1]))
+#         self.width = size[0]
+#         self.height = size[1]
+#         self.color = np.zeros(size[0]*size[1])
+#         #ideally i should normalize the min/max based on screen aspect
+#         self.r_min, self.r_max = -2.0, 2.0
+#         self.i_min, self.i_max = -2.0, 2.0
+#         self.c = complex(1.0, 0.440)
+#         self.r_range = np.arange(self.r_min, self.r_max, 4./self.width)
+#         self.i_range = np.arange(self.i_max, self.i_min, 4./self.height)
+#          
+#     def build(self):
+#         index = 0
+#         for i in self.i_range:
+#             for r in self.r_range:
+#                 iter = 0
+#                 z = complex(r, i) 
+#                 while abs(z.real) < 50 and iter < MAX_ITER:
+#                     z = z*z+self.c
+#                     iter += 1
+#                 self.color[index] = iter*10
+#                 index+=1
+#         return self.color
+#         
+#     def rebuild(self):
+#         pass
+#         
+#*******************************************************************************
+frac = None
+MAX_ITER = 20
+palette16 = []
+rend = None
+
+#Read colors from netpbm (.pbm) file
+#must be RGB
+#Used photoshop generated pbm as reference
 def readPalette(filename):
     data = []
-    f = open( filename, 'r' ) #16 color palette
+    f = open( filename, 'r' ) 
     f.seek(0,2)
     j = f.tell()
     f.seek(0)
@@ -30,41 +70,7 @@ def readPalette(filename):
     f.close()
     return data
     
-#def resize():
-frac = None
-MAX_ITER = 20
-palette16 = []
-rend = None
 
-class Fractal():
-    def __init__(self, size):
-        self.array = np.zeros(shape=(size[0], size[1]))
-        self.width = size[0]
-        self.height = size[1]
-        self.color = np.zeros(size[0]*size[1])
-        #ideally i should normalize the min/max based on screen aspect
-        self.r_min, self.r_max = -2.0, 2.0
-        self.i_min, self.i_max = -2.0, 2.0
-        self.c = complex(1.0, 0.440)
-        self.r_range = np.arange(self.r_min, self.r_max, 4./self.width)
-        self.i_range = np.arange(self.i_max, self.i_min, 4./self.height)
-         
-    def build(self):
-        index = 0
-        for i in self.i_range:
-            for r in self.r_range:
-                iter = 0
-                z = complex(r, i) 
-                while abs(z.real) < 50 and iter < MAX_ITER:
-                    z = z*z+self.c
-                    iter += 1
-                self.color[index] = iter*10
-                index+=1
-        return self.color
-        
-    def rebuild(self):
-        pass
-        
 glsl_v = \
 """
 #version 420
@@ -75,9 +81,10 @@ varying vec2 pos;
 uniform int step;
 uniform vec2 pan;
 uniform float zoom;
+uniform float aspect;
 void main() {
     //pos = vec2((VertPos.x-pan.x), (VertPos.y-pan.y))/zoom;
-    pos = vec2((VertPos.x*(1.0/zoom))+pan.x, (VertPos.y* (1.0/zoom))+pan.y);
+    pos = vec2(((VertPos.x*(1.0/zoom))+pan.x)*aspect, ((VertPos.y* (1.0/zoom))+pan.y));
     gl_Position = vec4(VertPos.x, VertPos.y, 0.0f, 1.0f);
     
 }
@@ -119,13 +126,13 @@ void main() {
 
 class renderer():
     def __init__(self, size, palette):
-        
         self.drawing_area = np.array([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0], dtype='float32')
         self.shaderProg = GLuint
         self.vbo = GLuint
         self.ebo = GLuint
         self.tex = GLuint
         self.size = [size[0], size[1]]
+        self.aspect = float(size[0]/size[1])
         self.palette_colors = len(palette)/3
         self.palette = np.empty(len(palette), dtype='float32')
         print len(palette)
@@ -143,8 +150,8 @@ class renderer():
         self.key_pan_precis = 0.01
         self.key_step = 1
         self.uni_c = GLuint
-        self.c_1 = 0.80
-        self.c_2 = 0.08
+        self.c_1 = 0.40
+        self.c_2 = 0.18
         
         self.count = 0
         
@@ -160,6 +167,7 @@ class renderer():
         self.hud1_show = 1
         self.hud2_show = 1
         self.hud_ds = [""]*(self.hud2_size+self.hud2_size)
+        
         self.initialize()
         
     def keyboard(self, key, x, y):
@@ -277,7 +285,6 @@ class renderer():
         glUniform1i(glGetUniformLocation(self.shaderProg, 'tex'), 0)
         
     def initUniforms(self):        
-        self.uni_pos = glGetUniformLocation(self.shaderProg, "pos")
         self.uni_step = glGetUniformLocation(self.shaderProg, "step")
         glUniform1i(self.uni_step, 0)
         self.uni_zoom = glGetUniformLocation(self.shaderProg, "zoom")
@@ -288,12 +295,10 @@ class renderer():
         glUniform2f(self.uni_c, self.c_1, self.c_2)
         self.uni_palette = glGetUniformLocation(self.shaderProg, "palette")
         glUniform1i(self.uni_palette, self.palette_bool)
-        
-    def colorCycle(self):
-        self.count += 3
-        if(self.count > 47):
-            self.count = 0
+        self.uni_aspect = glGetUniformLocation(self.shaderProg, "aspect")
+        glUniform1f(self.uni_aspect, self.aspect)
             
+    #FIXME: When resizing spacing changes        
     def drawHud(self):
         if(self.hud1_show == True):
             self.hud_ds[0] = self.hud1_str[0] % (self.key_zoom)
@@ -324,23 +329,23 @@ class renderer():
     def draw(self):
         glClear(GL_COLOR_BUFFER_BIT)
         glUseProgram(self.shaderProg)
-        glUniform3f(self.uni_pos,
-                    self.palette[self.count],
-                    self.palette[self.count+1],
-                    self.palette[self.count+2])
         glUniform1i(self.uni_step, self.key_step)
         glUniform1f(self.uni_zoom, self.key_zoom)
         glUniform2f(self.uni_pan, self.key_pany, self.key_panx) 
         glUniform2f(self.uni_c, self.c_1, self.c_2)
-        glUniform1i(self.uni_palette, self.palette_bool)       
+        glUniform1i(self.uni_palette, self.palette_bool) 
+        glUniform1f(self.uni_aspect, self.aspect)      
         glDrawArrays(GL_QUADS, 0, 4)
 #        self.colorCycle()
         glUseProgram(0)
         self.drawHud()
                 
         glutSwapBuffers()
-        
-        
+    
+    def resize(self, x, y):
+        glViewport(0, 0, x, y)
+        self.aspect = float(x)/float(y)
+#        print self.aspect
     def initialize(self):
         glViewport(0, 0, self.size[0], self.size[1])
         glClearColor(0.0, 0.0, 0.0, 1.0)
@@ -368,6 +373,7 @@ def init():
 #    glutReshapeFunc(resize)
     glutDisplayFunc(rend.draw)
     glutKeyboardFunc(rend.keyboard)
+    glutReshapeFunc(rend.resize)
     glutMainLoop()
 
 init()
